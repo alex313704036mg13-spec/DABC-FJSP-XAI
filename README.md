@@ -2,7 +2,7 @@
 
 This repository contains the implementation for the master's thesis:
 
-Artificial Bee Colony Algorithm for Job Scheduling with XAI Visualization
+**Artificial Bee Colony Algorithm for Job Scheduling with XAI Visualization**
 
 ---
 
