@@ -642,8 +642,13 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     # Figure 3: MA-only waterfall
     # ---------------------------------------------------------
-    single_idx = int(np.argmin(np.abs(y_plot_actual - np.mean(y_plot_actual))))
+    y_plot_pred = model.predict(X_plot, verbose=0).reshape(-1)
 
+    single_idx = int(
+        np.argmin(
+            np.abs(y_plot_pred - y_plot_actual)
+        )
+    )
     exp = shap.Explanation(
         values=shap_df.iloc[single_idx].values,
         base_values=base_value,
