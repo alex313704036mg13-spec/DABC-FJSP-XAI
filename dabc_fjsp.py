@@ -70,7 +70,7 @@ OP_INDEX_MAP = {op: idx for idx, op in enumerate(GLOBAL_OP_LIST)}
 # ==========================================
 SN = 50
 MAX_ITER = 600
-LIMIT = 20
+LIMIT = 40
 TARGET_SAMPLES = 5000
 NUM_RUNS = 30
 BKS = 11
