@@ -1,0 +1,313 @@
+import numpy as np
+import pandas as pd
+import random
+import copy
+import matplotlib.pyplot as plt
+
+# ==========================================
+# 1. 題目數據定義：Kacem 4x5
+# ==========================================
+PROCESSING_TIMES = {
+    1: {
+        1: [2, 5, 4, 1, 2],
+        2: [5, 4, 5, 7, 5],
+        3: [4, 5, 5, 4, 5],
+    },
+    2: {
+        1: [2, 5, 4, 7, 8],
+        2: [5, 6, 9, 8, 5],
+        3: [4, 5, 4, 54, 5],
+    },
+    3: {
+        1: [9, 8, 6, 7, 9],
+        2: [6, 1, 2, 5, 4],
+        3: [2, 5, 4, 2, 4],
+        4: [4, 5, 2, 1, 5],
+    },
+    4: {
+        1: [1, 5, 2, 4, 12],
+        2: [5, 1, 2, 1, 2],
+    }
+}
+
+NUM_JOBS = 4
+NUM_MACHINES = 5
+JOB_OP_COUNTS = {1: 3, 2: 3, 3: 4, 4: 2}
+TOTAL_OPS = sum(JOB_OP_COUNTS.values())
+
+GLOBAL_OP_LIST = []
+OP_NAMES = []
+
+for j in range(1, NUM_JOBS + 1):
+    for k in range(1, JOB_OP_COUNTS[j] + 1):
+        GLOBAL_OP_LIST.append((j, k))
+        OP_NAMES.append(f"O{j}{k}")
+
+OP_INDEX_MAP = {op: idx for idx, op in enumerate(GLOBAL_OP_LIST)}
+
+# ==========================================
+# 2. DABC 基準參數與敏感度分析設定
+# ==========================================
+SN = 50
+MAX_ITER = 600
+NUM_RUNS = 30
+BKS = 11
+
+# 敏感度分析測試點
+LIMIT_LIST = [10, 20, 40, 60, 80]
+
+# ==========================================
+# 3. Solution 類別
+# ==========================================
+class Solution:
+    def __init__(self, os_seq=None, ma_assign=None):
+        # OS：工序排序編碼
+        if os_seq is None:
+            raw_os = []
+            for j in range(1, NUM_JOBS + 1):
+                raw_os.extend([j] * JOB_OP_COUNTS[j])
+            random.shuffle(raw_os)
+            self.os = np.array(raw_os, dtype=int)
+        else:
+            self.os = np.array(os_seq, dtype=int)
+
+        # MA：機台指派編碼
+        if ma_assign is None:
+            self.ma = np.random.randint(1, NUM_MACHINES + 1, size=TOTAL_OPS, dtype=int)
+        else:
+            self.ma = np.array(ma_assign, dtype=int)
+
+        self.cmax = 0
+        self.trial = 0
+        self.schedule = []
+
+        self.calculate_cmax()
+
+    def calculate_cmax(self):
+        machine_free_time = np.zeros(NUM_MACHINES, dtype=int)
+        job_next_free_time = {j: 0 for j in range(1, NUM_JOBS + 1)}
+        job_op_counter = {j: 0 for j in range(1, NUM_JOBS + 1)}
+
+        schedule = []
+
+        for job_id in self.os:
+            job_op_counter[job_id] += 1
+            op_k = job_op_counter[job_id]
+
+            global_op_index = OP_INDEX_MAP[(job_id, op_k)]
+            machine_id = int(self.ma[global_op_index])
+            m_idx = machine_id - 1
+
+            p_time = PROCESSING_TIMES[job_id][op_k][m_idx]
+
+            start = max(job_next_free_time[job_id], machine_free_time[m_idx])
+            end = start + p_time
+
+            machine_free_time[m_idx] = end
+            job_next_free_time[job_id] = end
+
+            schedule.append({
+                "job": job_id,
+                "op": op_k,
+                "machine": machine_id,
+                "start": start,
+                "end": end,
+                "name": f"O{job_id}{op_k}"
+            })
+
+        self.cmax = max(job_next_free_time.values())
+        self.schedule = schedule
+
+
+# ==========================================
+# 4. 鄰域操作
+# ==========================================
+def generate_neighbor(sol):
+    new_os = sol.os.copy()
+    new_ma = sol.ma.copy()
+
+    r = random.random()
+
+    # OS-swap
+    if r < 1 / 3:
+        i, j = random.sample(range(TOTAL_OPS), 2)
+        new_os[i], new_os[j] = new_os[j], new_os[i]
+
+    # OS-insert
+    elif r < 2 / 3:
+        i, j = random.sample(range(TOTAL_OPS), 2)
+        val = new_os[i]
+        new_os = np.delete(new_os, i)
+        new_os = np.insert(new_os, j, val)
+
+    # MA-reassign
+    else:
+        op_index = random.randint(0, TOTAL_OPS - 1)
+        cur_m = int(new_ma[op_index])
+        choices = list(range(1, NUM_MACHINES + 1))
+        choices.remove(cur_m)
+        new_ma[op_index] = random.choice(choices)
+
+    return Solution(new_os, new_ma)
+
+
+# ==========================================
+# 5. 單次 DABC 主流程
+# ==========================================
+def run_dabc_once(run_id=1, limit=20):
+    print(f"Run {run_id:02d} | limit = {limit}")
+
+    # 初始化族群
+    population = [Solution() for _ in range(SN)]
+    best_sol = copy.deepcopy(min(population, key=lambda x: x.cmax))
+
+    for it in range(MAX_ITER):
+
+        # ------------------------------
+        # Employed bees
+        # ------------------------------
+        for i in range(SN):
+            new_sol = generate_neighbor(population[i])
+
+            if new_sol.cmax < population[i].cmax:
+                population[i] = new_sol
+                population[i].trial = 0
+            else:
+                population[i].trial += 1
+
+        # ------------------------------
+        # Fitness & probability
+        # ------------------------------
+        fitness = [1 / (1 + sol.cmax) for sol in population]
+        total_fit = sum(fitness)
+        probs = [f / total_fit for f in fitness]
+
+        # ------------------------------
+        # Onlooker bees
+        # ------------------------------
+        for _ in range(SN):
+            idx = np.random.choice(range(SN), p=probs)
+            new_sol = generate_neighbor(population[idx])
+
+            if new_sol.cmax < population[idx].cmax:
+                population[idx] = new_sol
+                population[idx].trial = 0
+            else:
+                population[idx].trial += 1
+
+        # ------------------------------
+        # Scout bees
+        # ------------------------------
+        for i in range(SN):
+            if population[i].trial >= limit:
+                population[i] = Solution()
+                population[i].trial = 0
+
+        # ------------------------------
+        # 更新全域最佳解
+        # ------------------------------
+        cur_best = min(population, key=lambda x: x.cmax)
+        if cur_best.cmax < best_sol.cmax:
+            best_sol = copy.deepcopy(cur_best)
+
+    return best_sol.cmax
+
+
+# ==========================================
+# 6. limit 敏感度分析
+# ==========================================
+def run_limit_sensitivity_analysis():
+    sensitivity_results = []
+
+    for limit in LIMIT_LIST:
+        print("\n" + "=" * 60)
+        print(f"Start sensitivity test: limit = {limit}")
+        print("=" * 60)
+
+        all_best_cmax = []
+
+        for run in range(1, NUM_RUNS + 1):
+            best_cmax = run_dabc_once(run_id=run, limit=limit)
+            all_best_cmax.append(best_cmax)
+
+        best_cmax = int(np.min(all_best_cmax))
+        avg_cmax = float(np.mean(all_best_cmax))
+        worst_cmax = int(np.max(all_best_cmax))
+        sr = sum(1 for x in all_best_cmax if x == BKS) / NUM_RUNS * 100
+
+        sensitivity_results.append({
+            "limit": limit,
+            "Best Cmax": best_cmax,
+            "Average Cmax": round(avg_cmax, 4),
+            "Worst Cmax": worst_cmax,
+            "SR (%)": round(sr, 2),
+            "Each Run Best Cmax": all_best_cmax
+        })
+
+        print(f"\nlimit = {limit} result")
+        print("Each run best Cmax =", all_best_cmax)
+        print(f"Best Cmax = {best_cmax}")
+        print(f"Average Cmax = {avg_cmax:.4f}")
+        print(f"Worst Cmax = {worst_cmax}")
+        print(f"SR = {sr:.2f}%")
+
+    return pd.DataFrame(sensitivity_results)
+
+
+# ==========================================
+# ==========================================
+# 7. 畫圖：limit 對 Average Cmax 的影響
+# ==========================================
+def plot_limit_sensitivity(df):
+    plt.figure(figsize=(7, 4.5))
+
+    plt.plot(
+        df["limit"],
+        df["Average Cmax"],
+        marker="o",
+        linewidth=2
+    )
+
+    # 在每個點上標示 Average Cmax 數值
+    for x, y in zip(df["limit"], df["Average Cmax"]):
+        plt.text(
+            x,
+            y + 0.03,
+            f"{y:.4f}",
+            ha="center",
+            fontsize=9
+        )
+
+    plt.xlabel("limit")
+    plt.ylabel("Average Cmax")
+    plt.title("Sensitivity Analysis of limit on Average Cmax")
+
+    # 只顯示設定的五個 limit 測試點
+    plt.xticks(LIMIT_LIST)
+    plt.xlim(min(LIMIT_LIST) - 3, max(LIMIT_LIST) + 3)
+
+    plt.grid(True, linestyle="--", linewidth=0.5)
+
+    plt.tight_layout()
+    plt.savefig("limit_sensitivity_avg_cmax.png", dpi=300)
+    plt.show()
+
+# ==========================================
+# 8. 主程式
+# ==========================================
+if __name__ == "__main__":
+
+    df_sensitivity = run_limit_sensitivity_analysis()
+
+    print("\n" + "=" * 60)
+    print("DABC limit Sensitivity Analysis Summary")
+    print("=" * 60)
+    print(df_sensitivity[["limit", "Best Cmax", "Average Cmax", "Worst Cmax", "SR (%)"]])
+
+    # 儲存敏感度分析結果
+    df_sensitivity.to_csv("dabc_limit_sensitivity_results.csv", index=False)
+    print("\nSaved results -> dabc_limit_sensitivity_results.csv")
+
+    # 畫 Average Cmax 圖
+    plot_limit_sensitivity(df_sensitivity)
+    print("Saved figure -> limit_sensitivity_avg_cmax.png")
