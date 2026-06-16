@@ -1,3 +1,15 @@
+"""
+DABC limit sensitivity analysis for the Kacem 4x5 FJSP instance.
+
+This script:
+1. Solves the Kacem 4x5 flexible job shop scheduling problem using DABC.
+2. Tests different abandonment-limit values.
+3. Reports Best Cmax, Average Cmax, Worst Cmax, and Success Rate (SR).
+4. Saves the sensitivity-analysis table and Average Cmax figure.
+
+Author: Shih-Chia Yeh
+"""
+
 import numpy as np
 import pandas as pd
 import random
@@ -5,7 +17,7 @@ import copy
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. 題目數據定義：Kacem 4x5
+# 1. Problem data: Kacem 4x5
 # ==========================================
 PROCESSING_TIMES = {
     1: {
@@ -46,22 +58,22 @@ for j in range(1, NUM_JOBS + 1):
 OP_INDEX_MAP = {op: idx for idx, op in enumerate(GLOBAL_OP_LIST)}
 
 # ==========================================
-# 2. DABC 基準參數與敏感度分析設定
+# 2. DABC parameters and sensitivity settings
 # ==========================================
 SN = 50
 MAX_ITER = 600
 NUM_RUNS = 30
 BKS = 11
 
-# 敏感度分析測試點
+# Sensitivity-analysis test points
 LIMIT_LIST = [10, 20, 40, 60, 80]
 
 # ==========================================
-# 3. Solution 類別
+# 3. Solution representation
 # ==========================================
 class Solution:
     def __init__(self, os_seq=None, ma_assign=None):
-        # OS：工序排序編碼
+        # OS: operation sequence encoding
         if os_seq is None:
             raw_os = []
             for j in range(1, NUM_JOBS + 1):
@@ -71,7 +83,7 @@ class Solution:
         else:
             self.os = np.array(os_seq, dtype=int)
 
-        # MA：機台指派編碼
+        # MA: machine assignment encoding
         if ma_assign is None:
             self.ma = np.random.randint(1, NUM_MACHINES + 1, size=TOTAL_OPS, dtype=int)
         else:
@@ -120,7 +132,27 @@ class Solution:
 
 
 # ==========================================
-# 4. 鄰域操作
+# Feasibility check
+# ==========================================
+def is_feasible(sol):
+    # OS length check
+    if len(sol.os) != TOTAL_OPS:
+        return False
+
+    # Job occurrence count check
+    for job_id in range(1, NUM_JOBS + 1):
+        if np.sum(sol.os == job_id) != JOB_OP_COUNTS[job_id]:
+            return False
+
+    # MA range check
+    if np.any(sol.ma < 1) or np.any(sol.ma > NUM_MACHINES):
+        return False
+
+    return True
+
+
+# ==========================================
+# 4. Neighborhood operators
 # ==========================================
 def generate_neighbor(sol):
     new_os = sol.os.copy()
@@ -152,12 +184,12 @@ def generate_neighbor(sol):
 
 
 # ==========================================
-# 5. 單次 DABC 主流程
+# 5. Single DABC run
 # ==========================================
 def run_dabc_once(run_id=1, limit=20):
     print(f"Run {run_id:02d} | limit = {limit}")
 
-    # 初始化族群
+    # Initialize population
     population = [Solution() for _ in range(SN)]
     best_sol = copy.deepcopy(min(population, key=lambda x: x.cmax))
 
@@ -184,27 +216,69 @@ def run_dabc_once(run_id=1, limit=20):
 
         # ------------------------------
         # Onlooker bees
+        # Hand-written roulette-wheel selection.
+        # This version explicitly follows the decision-rule flow:
+        # i in valid range -> cumulative probability interval -> select xi or i = i + 1.
         # ------------------------------
         for _ in range(SN):
-            idx = np.random.choice(range(SN), p=probs)
-            new_sol = generate_neighbor(population[idx])
 
-            if new_sol.cmax < population[idx].cmax:
-                population[idx] = new_sol
-                population[idx].trial = 0
+            r = random.random()
+            i = 0
+            cumulative_prob = 0.0
+            chosen_idx = None
+            CONT = 1
+
+            while CONT == 1:
+
+                cumulative_prob += probs[i]
+
+                if r <= cumulative_prob:
+                    chosen_idx = i
+                    CONT = 0
+
+                else:
+                    i += 1
+
+                    if i >= SN:
+                        CONT = 0
+                        break
+
+            # Numerical safety fallback
+            if chosen_idx is None:
+                chosen_idx = SN - 1
+
+            new_sol = generate_neighbor(population[chosen_idx])
+
+            if new_sol.cmax < population[chosen_idx].cmax:
+                population[chosen_idx] = new_sol
+                population[chosen_idx].trial = 0
             else:
-                population[idx].trial += 1
+                population[chosen_idx].trial += 1
 
         # ------------------------------
         # Scout bees
+        # If a food source reaches the abandonment limit, regenerate it.
+        # The feasibility check is retained for general FJSP extensibility.
         # ------------------------------
         for i in range(SN):
             if population[i].trial >= limit:
-                population[i] = Solution()
-                population[i].trial = 0
+
+                CONT = 1
+
+                while CONT == 1:
+                    new_sol = Solution()
+
+                    if is_feasible(new_sol):
+                        population[i] = new_sol
+                        population[i].trial = 0
+                        CONT = 0
+
+                    else:
+                        # Reject infeasible solution and regenerate
+                        CONT = 1
 
         # ------------------------------
-        # 更新全域最佳解
+        # Update global best solution
         # ------------------------------
         cur_best = min(population, key=lambda x: x.cmax)
         if cur_best.cmax < best_sol.cmax:
@@ -214,7 +288,7 @@ def run_dabc_once(run_id=1, limit=20):
 
 
 # ==========================================
-# 6. limit 敏感度分析
+# 6. Limit sensitivity analysis
 # ==========================================
 def run_limit_sensitivity_analysis():
     sensitivity_results = []
@@ -255,8 +329,7 @@ def run_limit_sensitivity_analysis():
 
 
 # ==========================================
-# ==========================================
-# 7. 畫圖：limit 對 Average Cmax 的影響
+# 7. Plot: effect of limit on Average Cmax
 # ==========================================
 def plot_limit_sensitivity(df):
     plt.figure(figsize=(7, 4.5))
@@ -268,7 +341,7 @@ def plot_limit_sensitivity(df):
         linewidth=2
     )
 
-    # 在每個點上標示 Average Cmax 數值
+    # Annotate Average Cmax values
     for x, y in zip(df["limit"], df["Average Cmax"]):
         plt.text(
             x,
@@ -282,7 +355,7 @@ def plot_limit_sensitivity(df):
     plt.ylabel("Average Cmax")
     plt.title("Sensitivity Analysis of limit on Average Cmax")
 
-    # 只顯示設定的五個 limit 測試點
+    # Show only the tested limit values
     plt.xticks(LIMIT_LIST)
     plt.xlim(min(LIMIT_LIST) - 3, max(LIMIT_LIST) + 3)
 
@@ -292,8 +365,9 @@ def plot_limit_sensitivity(df):
     plt.savefig("limit_sensitivity_avg_cmax.png", dpi=300)
     plt.show()
 
+
 # ==========================================
-# 8. 主程式
+# 8. Main program
 # ==========================================
 if __name__ == "__main__":
 
@@ -304,10 +378,10 @@ if __name__ == "__main__":
     print("=" * 60)
     print(df_sensitivity[["limit", "Best Cmax", "Average Cmax", "Worst Cmax", "SR (%)"]])
 
-    # 儲存敏感度分析結果
+    # Save sensitivity-analysis results
     df_sensitivity.to_csv("dabc_limit_sensitivity_results.csv", index=False)
     print("\nSaved results -> dabc_limit_sensitivity_results.csv")
 
-    # 畫 Average Cmax 圖
+    # Plot Average Cmax
     plot_limit_sensitivity(df_sensitivity)
     print("Saved figure -> limit_sensitivity_avg_cmax.png")
