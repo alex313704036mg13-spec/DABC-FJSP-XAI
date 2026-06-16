@@ -145,8 +145,15 @@ class Solution:
 
         self.cmax = max(job_next_free_time.values())
         self.schedule = schedule
-
-
+def is_feasible(sol):
+    if len(sol.os) != TOTAL_OPS:
+        return False
+    for job_id in range(1, NUM_JOBS + 1):
+        if np.sum(sol.os == job_id) != JOB_OP_COUNTS[job_id]:
+            return False
+    if np.any(sol.ma < 1) or np.any(sol.ma > NUM_MACHINES):
+        return False
+    return True
 # ==========================================
 # 4. Neighborhood Operators
 # ==========================================
@@ -275,10 +282,17 @@ def run_dabc_collect_dataset(run_id=1):
             else:
                 population[idx].trial += 1
 
-        # Scout bee phase
+     # Scout bees
         for i in range(SN):
+
             if population[i].trial >= LIMIT:
-                population[i] = Solution()
+
+                new_sol = Solution()
+
+                while not is_feasible(new_sol):
+                    new_sol = Solution()
+
+                population[i] = new_sol
                 population[i].trial = 0
 
                 if len(data_records) < TARGET_SAMPLES:
